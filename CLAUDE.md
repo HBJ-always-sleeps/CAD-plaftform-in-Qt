@@ -22,6 +22,22 @@ cmd /c '"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\To
 
 Executables output to `bin/Debug/` or `bin/Release/`.
 
+### Running the built executable
+
+Qt DLLs must be on PATH. Either use `windeployqt` or set PATH manually:
+```powershell
+$env:PATH = "D:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"
+.\bin\Debug\HydraulicCADPlatform.exe
+```
+
+### qmake (alternative)
+
+```powershell
+set QTDIR=D:\Qt\6.8.3\msvc2022_64
+%QTDIR%\bin\qmake.exe HydraulicCADPlatform.pro -spec win32-msvc
+nmake
+```
+
 ### Build targets
 
 | Target | Description |
