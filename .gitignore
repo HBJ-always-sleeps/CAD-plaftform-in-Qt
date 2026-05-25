@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+bin/
+
+# Build logs and temp files
+build_error*.txt
+build_output*.txt
+build_stderr.txt
+build_stdout.txt
+check_result.txt
+test_output*.txt
+temp_header.txt
+test_hatch_color.dxf
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
