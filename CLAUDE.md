@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-HydraulicCADPlatform (航道断面算量自动化平台) - a C++/Qt6 application for hydraulic channel cross-section quantity calculations. The project is a migration from a Python/PyQt6 original (`original_scripts/`) to C++/Qt6, with Python retained for mathematically precise polygon operations via Shapely.
+HydraulicCADPlatform v3.7.0 (航道断面算量自动化平台) - a C++17/Qt6 application for hydraulic channel cross-section quantity calculations. Migrated from Python/PyQt6 (`original_scripts/`), with Python retained for mathematically precise polygon operations via Shapely. No third-party C++ dependencies required by default — uses a custom DXF parser (`DXFWrapper`) and CSV fallback for Excel export.
 
 ## Build Commands
 
@@ -32,6 +32,12 @@ Executables output to `bin/Debug/` or `bin/Release/`.
 | `TestDxfSimple` | DXF entity counting benchmark |
 | `TestFileRead` | File read speed benchmark |
 
+### Optional third-party (not required)
+
+CMake options `USE_DXFLIB` and `USE_QTXLSX` look in `thirdparty/` for dxflib and QtXlsxWriter, but neither directory exists by default. The project compiles without them:
+- Without dxflib: `DXFWrapper.cpp` provides full DXF read/write as a custom text parser
+- Without QtXlsx: `ExcelExporter` falls back to CSV output
+
 ### Python dependencies
 
 The Python scripts in `scripts/` require:
@@ -40,6 +46,10 @@ pip install shapely ezdxf pandas openpyxl numpy
 ```
 
 ## Architecture
+
+### Build state
+
+Project is ~80% complete per `REFACTOR_PROGRESS.md`. Main gaps: dxflib integration for advanced entity operations, complete geometric algorithms (C++ polygon boolean ops are simplified — use Python for precision), QtXlsx for native Excel output.
 
 ### Hybrid C++/Python design
 
@@ -60,7 +70,13 @@ MainWindow (Qt6 GUI)
 
 ### C++ → Python data exchange
 
-`EngineCad::runPythonComputation()` exports section data as JSON, calls Python via QProcess (5-minute timeout), then cleans up the JSON file. Python reads JSON, computes, and writes DXF+XLSX directly.
+`EngineCad::runPythonComputation()` exports section data as JSON, calls Python via QProcess (5-minute timeout), then cleans up the JSON file. Python reads JSON, computes, writes DXF+XLSX, and prints a result line to stdout:
+
+```
+__RESULT__:{"totalArea": 1234.5, "backfillArea": 567.8}
+```
+
+C++ parses this line to get computed areas. If the line is missing or malformed, the C++ side treats the computation as failed.
 
 JSON structure:
 ```json
@@ -89,11 +105,21 @@ Six tasks in `src/EngineCad.cpp`:
 
 ### Custom geometry types (include/Geometry.h)
 
-Lightweight types replacing Shapely for C++ side: `Point2D`, `Line2D` (polyline), `Polygon2D` (exterior + interiors, Shoelace area), `Box2D` (bounding box). The Python side uses actual Shapely for precise boolean operations.
+Lightweight types replacing Shapely for C++ side: `Point2D`, `Line2D` (polyline), `Polygon2D` (exterior + interiors, Shoelace area), `Box2D` (bounding box), `MultiPolygon2D`. `GeometryUtils` provides simplified polygon operations:
+- `polygonIntersection()` — Sutherland-Hodgman clipping
+- `polygonDifference()` — split-based difference
+- `polygonize()` — line segments to polygons via connectivity
+- `computeConvexHull()` — Graham Scan
+
+The Python side uses actual Shapely for precise boolean operations where the C++ simplifications are insufficient.
+
+### ExcelExporter (src/ExcelExporter.h)
+
+Static export methods for all task results. When `USE_QTXLSX` is enabled, writes multi-sheet XLSX via QtXlsxWriter; otherwise falls back to CSV. The Python side (`autosection_compute.py`) also generates XLSX via pandas+openpyxl — the C++ ExcelExporter is mainly for tasks that don't call Python.
 
 ### Utility headers (include/utils/)
 
-Header-only utilities: `EnvelopeGenerator.h` (upper/lower envelope), `LineUtils.h` (interpolation, intersection), `StationMatcher.h` (K67+400 parsing), `RulerDetector.h` (scale detection via linear regression), `VirtualBoxBuilder.h` (Y-clustering), `LayerExtractor.h`, `HatchProcessor.h`.
+Header-only utilities: `EnvelopeGenerator.h` (upper/lower envelope via min/max Y sampling), `LineUtils.h` (linear interpolation, segment intersection, line merging), `StationMatcher.h` (regex-based `K67+400` parsing and nearest-neighbor matching), `RulerDetector.h` (per-section scale detection via INSERT entity proximity + linear regression), `VirtualBoxBuilder.h` (Y-coordinate clustering for over-excavation sections), `LayerExtractor.h` (entity filtering, strata layer detection via `^\d+级` regex), `HatchProcessor.h` (HATCH to Polygon2D conversion, area labels).
 
 ## DXF Encoding
 
