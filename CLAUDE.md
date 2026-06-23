@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HydraulicCADPlatform v3.7.0 (航道断面算量自动化平台) - a C++17/Qt6 application for hydraulic channel cross-section quantity calculations. Migrated from Python/PyQt6 (`original_scripts/`), with Python retained for mathematically precise polygon operations via Shapely. No third-party C++ dependencies required by default — uses a custom DXF parser (`DXFWrapper`) and CSV fallback for Excel export.
 
+The `refactor/` directory contains v3.9.0 — a cleaned-up version with ~60% less code (6112→2407 lines). Key changes: 5 dead headers deleted, dead stubs removed from EngineCad, static string constants for log levels, Bounds2D removed (Box2D only), autopaste v2 fully implemented. Both versions share the same Python scripts and test data.
+
 ## Build Commands
 
 ### CMake + MSVC (primary build method)
@@ -28,6 +30,19 @@ Qt DLLs must be on PATH. Either use `windeployqt` or set PATH manually:
 ```powershell
 $env:PATH = "D:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"
 .\bin\Debug\HydraulicCADPlatform.exe
+.\bin\Debug\TestAutosection.exe
+```
+
+### Refactored codebase (refactor/)
+
+`refactor/` is a parallel copy of the project (v3.8.0) with cleaner code. It has its own build directory and convenience scripts:
+```powershell
+# Build and run the integration test
+powershell -NoProfile -File "D:/QtCADPlatform/refactor/build_test.ps1"
+powershell -NoProfile -Command '$env:PATH = "D:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"; & "D:\QtCADPlatform\refactor\bin\Debug\TestAutosection.exe"'
+
+# Build the main GUI
+powershell -NoProfile -File "D:/QtCADPlatform/refactor/build_all.ps1"
 ```
 
 ### qmake (alternative)
@@ -44,6 +59,7 @@ nmake
 |--------|-------------|
 | `HydraulicCADPlatform` | Main GUI application |
 | `TestAutosection` | Integration test for autosection+backfill tasks |
+| `TestV4` | V4 section-specific autosection test |
 | `TestDxfLayers` | DXF layer parsing verification |
 | `TestDxfSimple` | DXF entity counting benchmark |
 | `TestFileRead` | File read speed benchmark |
@@ -105,7 +121,8 @@ JSON structure:
     "calc_mode": "above" | "below",
     "strata_layers": ["1级淤泥", "3级砂", ...],
     "sections": [{"station": "K67+400", "dmx_points": [[x,y],...], "aux_lines": [...]}],
-    "excav_lines": [{"points": [[x,y],...]}]
+    "excav_lines": [{"points": [[x,y],...]}],
+    "overexc_lines": [{"points": [[x,y],...]}]
 }
 ```
 
@@ -135,7 +152,13 @@ Static export methods for all task results. When `USE_QTXLSX` is enabled, writes
 
 ### Utility headers (include/utils/)
 
-Header-only utilities: `EnvelopeGenerator.h` (upper/lower envelope via min/max Y sampling), `LineUtils.h` (linear interpolation, segment intersection, line merging), `StationMatcher.h` (regex-based `K67+400` parsing and nearest-neighbor matching), `RulerDetector.h` (per-section scale detection via INSERT entity proximity + linear regression), `VirtualBoxBuilder.h` (Y-coordinate clustering for over-excavation sections), `LayerExtractor.h` (entity filtering, strata layer detection via `^\d+级` regex), `HatchProcessor.h` (HATCH to Polygon2D conversion, area labels).
+Header-only utilities: `EnvelopeGenerator.h` (upper/lower envelope via min/max Y sampling), `LineUtils.h` (linear interpolation, segment intersection), `StationMatcher.h` (regex-based `K67+400` parsing and nearest-neighbor matching), `VirtualBoxBuilder.h` (Y-coordinate clustering for over-excavation sections).
+
+In the refactored codebase, 5 headers were deleted (EntityHelper, HatchProcessor, RulerDetector, OutputHelper, LayerExtractor) — their used functions were inlined into EngineCad.cpp. Ruler detection is now a static function `detectRulerScaleFromDXF()` in EngineCad.cpp. Strata layer detection is `detectStrataLayers()`. Output path helpers are `getOutputPathStatic()` and `buildBackfillOutputNameStatic()`.
+
+### Reference implementations
+
+`original_scripts/` contains the original Python/PyQt6 code (`engine_cad_v3.py`, `platform_ui_v3.py`). When porting or debugging, compare against these. `scripts/compare_summary.md` documents output parity between the Python original and C++ hybrid.
 
 ## DXF Encoding
 
@@ -164,11 +187,31 @@ for (QChar c : layerName) {
 
 ### Station number format
 
-`K69+400` → integer value 69400. `Config::parseSourceStation()` / `Config::formatStation()` handle conversion.
+`K69+400` → integer value 69400. `Config::parseStation()` / `Config::formatStation()` handle conversion.
 
 ### Strata layer detection
 
 Layers matching `^\d+级` regex (e.g., "1级淤泥", "3级砂"). Color mapping in `Config::STRATA_COLORS`.
+
+### DXF layer structure for autosection
+
+Three boundary layers define the excavation area:
+- **开挖线** (U+5F00 U+6316 U+7EBF) — Inner excavation boundary (1420 entities)
+- **超挖线** (U+8D85 U+6316 U+7EBF) — Outer over-excavation boundary (1564 entities)
+- **地质分层** (U+5730 U+8D28 U+5206 U+5C42) — Geological strata boundaries
+
+The 超挖线 extends further than 开挖线. Section extension must cover both layers to ensure complete hatch fills. The `overexc_lines` JSON field passes 超挖线 data from C++ to Python.
+
+### Log level constants (refactored codebase)
+
+EngineCad.cpp uses static string constants for log levels to avoid重复 `QStringLiteral` allocations:
+```cpp
+static const QString kInfo    = QStringLiteral("info");
+static const QString kError   = QStringLiteral("error");
+static const QString kWarn    = QStringLiteral("warning");
+static const QString kSuccess = QStringLiteral("success");
+```
+These are used both as log level parameters and as JSON result keys (`result[kSuccess] = true`).
 
 ### Ruler detection
 
@@ -179,6 +222,20 @@ Per-section detection: find nearest ruler INSERT by X proximity, pick best by Y 
 Test DXF files are at `D:\断面算量平台\测试文件\`. The main test file is `202511.dxf` with 245 DMX cross-sections. `TestAutosection` runs two scenarios:
 1. Full volume + backfill (elevation=0, below mode)
 2. Stratified above elevation -4m (above mode)
+
+### Build scripts
+
+Convenience PowerShell scripts for building:
+- `build_v4.ps1` — Build TestV4 target (V4 section-specific test)
+- `build_main.ps1` — Build main GUI application
+- `build_test.ps1` — Build TestAutosection target
+
+### Verification scripts
+
+`scripts/verify_boundary.py` — Verifies that design/over-excavation boundary strictly follows the excavation line:
+```powershell
+python scripts/verify_boundary.py "path/to/source.dxf" --section-layer V4 --sample 10
+```
 
 ## Common Issues
 
@@ -202,3 +259,23 @@ $file = "path.dxf"; $bytes = [IO.File]::ReadAllBytes($file)
 $content = [Text.Encoding]::GetEncoding("GBK").GetString($bytes)
 ($content -split "\r?\n") | where { $_ -eq "DMX" }
 ```
+
+### qDebug() output not visible on Windows
+
+On Windows Debug builds, `qDebug()` uses `OutputDebugString`, not stdout/stderr. To see output in a test executable, install a message handler:
+```cpp
+#include <cstdio>
+static void messageHandler(QtMsgType, const QMessageLogContext &, const QString &msg) {
+    fprintf(stderr, "%s\n", msg.toLocal8Bit().constData());
+}
+// In main():
+qInstallMessageHandler(messageHandler);
+```
+
+### Layer name matching: exact vs fuzzy
+
+`matchLinesByLayer()` (original only — removed in refactor) does fuzzy matching — any single character from the set matches. For critical entity extraction (DMX lines, update lines), prefer exact matching via `getEntityList()` or direct `line.layerName == layerName` comparison. Fuzzy matching with Chinese characters like 断/面 will over-match layers containing those characters individually.
+
+### Chinese path issues in build scripts
+
+PowerShell build scripts set `TEMP=C:\temp` to avoid Chinese characters in temp paths breaking MSVC tools. Ensure `C:\temp` exists or the scripts create it automatically.
