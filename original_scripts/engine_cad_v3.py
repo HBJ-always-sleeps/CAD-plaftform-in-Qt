@@ -2421,20 +2421,31 @@ def _build_design_polygon(excav_lines, sect_x_min, sect_x_max):
     
     if design_x_max <= design_x_min: return None
     
+    # 收集所有采样X坐标：均匀步长 + 开挖线折点
+    sample_xs = []
+    x_current = design_x_min
+    while x_current <= design_x_max:
+        sample_xs.append(x_current)
+        x_current += 1.0
+    # 加入开挖线折点的X坐标，确保边界严格沿折点分布
+    for line in excav_lines:
+        for pt in line.coords:
+            if design_x_min <= pt[0] <= design_x_max:
+                sample_xs.append(pt[0])
+    # 排序去重
+    sample_xs = sorted(set(sample_xs))
+
     x_samples = []
     y_samples = []
-    x_current = design_x_min
-    
-    while x_current <= design_x_max:
-        min_y = None
+    for xc in sample_xs:
+        max_y = None
         for line in excav_lines:
-            y = LineUtils.get_y_at_x(line, x_current)
-            if y is not None and (min_y is None or y < min_y):
-                min_y = y
-        if min_y is not None:
-            x_samples.append(x_current)
-            y_samples.append(min_y)
-        x_current += 1.0
+            y = LineUtils.get_y_at_x(line, xc)
+            if y is not None and (max_y is None or y > max_y):
+                max_y = y
+        if max_y is not None:
+            x_samples.append(xc)
+            y_samples.append(max_y)
     
     if len(x_samples) < 2: return None
     

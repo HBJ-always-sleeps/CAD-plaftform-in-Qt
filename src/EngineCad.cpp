@@ -538,25 +538,41 @@ Polygon2D EngineCad::buildDesignPolygon(const QVector<Line2D> &excavLines, doubl
     if (designXMax <= designXMin) return Polygon2D();
     
     // 采样构建设计区边界
-    QVector<double> xSamples;
-    QVector<double> ySamples;
+    // 收集所有采样X坐标：均匀步长 + 开挖线折点
+    QVector<double> sampleXs;
     double xCurrent = designXMin;
-    
     while (xCurrent <= designXMax) {
-        double minY = std::numeric_limits<double>::max();
-        for (const Line2D &line : excavLines) {
-            bool found = false;
-            double y = LineUtils::getYAtX(line, xCurrent, &found);
-            if (found && y < minY) {
-                minY = y;
+        sampleXs.append(xCurrent);
+        xCurrent += 1.0;
+    }
+    // 加入开挖线折点的X坐标，确保边界严格沿折点分布
+    for (const Line2D &line : excavLines) {
+        for (const Point2D &pt : line.points) {
+            if (pt.x >= designXMin && pt.x <= designXMax) {
+                sampleXs.append(pt.x);
             }
         }
-        
-        if (minY < std::numeric_limits<double>::max()) {
-            xSamples.append(xCurrent);
-            ySamples.append(minY);
+    }
+    // 排序去重
+    std::sort(sampleXs.begin(), sampleXs.end());
+    sampleXs.erase(std::unique(sampleXs.begin(), sampleXs.end()), sampleXs.end());
+
+    QVector<double> xSamples;
+    QVector<double> ySamples;
+    for (double xc : sampleXs) {
+        double maxY = -std::numeric_limits<double>::max();
+        for (const Line2D &line : excavLines) {
+            bool found = false;
+            double y = LineUtils::getYAtX(line, xc, &found);
+            if (found && y > maxY) {
+                maxY = y;
+            }
         }
-        xCurrent += 1.0;
+
+        if (maxY > -std::numeric_limits<double>::max()) {
+            xSamples.append(xc);
+            ySamples.append(maxY);
+        }
     }
     
     if (xSamples.size() < 2) return Polygon2D();
@@ -1252,6 +1268,21 @@ bool EngineCad::runAutosection(const QMap<QString, QString> &params, LogCallback
     }
     jsonData[QStringLiteral("excav_lines")] = excavArr;
 
+    // 超挖线（用于扩展断面覆盖范围）
+    QJsonArray overexcArr;
+    for (const Line2D &line : overexcLines) {
+        QJsonArray ptsArr;
+        for (const Point2D &pt : line.points) {
+            QJsonArray p; p.append(pt.x); p.append(pt.y);
+            ptsArr.append(p);
+        }
+        QJsonObject lineObj;
+        lineObj[QStringLiteral("points")] = ptsArr;
+        overexcArr.append(lineObj);
+    }
+    jsonData[QStringLiteral("overexc_lines")] = overexcArr;
+
+    log(QString(QStringLiteral("[INFO] 超挖线数量: %1")).arg(overexcLines.size()), QStringLiteral("info"));
     log(QStringLiteral("[INFO] 调用Python进行精确多边形计算..."), QStringLiteral("info"));
 
     QJsonObject pyResult;
@@ -1815,6 +1846,29 @@ bool EngineCad::runAutosectionBackfill(const QMap<QString, QString> &params, Log
         excavArr.append(lineObj);
     }
     jsonData[QStringLiteral("excav_lines")] = excavArr;
+
+    // 超挖线（用于扩展断面覆盖范围）
+    QJsonArray overexcArr;
+    for (const Line2D &line : overexcLines) {
+        QJsonArray ptsArr;
+        for (const Point2D &pt : line.points) {
+            QJsonArray p; p.append(pt.x); p.append(pt.y);
+            ptsArr.append(p);
+        }
+        QJsonObject lineObj;
+        lineObj[QStringLiteral("points")] = ptsArr;
+        overexcArr.append(lineObj);
+    }
+    jsonData[QStringLiteral("overexc_lines")] = overexcArr;
+
+    // Debug: dump JSON
+    {
+        QFile debugFile("D:/QtCADPlatform/refactor/debug_original.json");
+        if (debugFile.open(QIODevice::WriteOnly)) {
+            debugFile.write(QJsonDocument(jsonData).toJson(QJsonDocument::Compact));
+            debugFile.close();
+        }
+    }
 
     log(QStringLiteral("[INFO] 调用Python进行精确多边形计算..."), QStringLiteral("info"));
 

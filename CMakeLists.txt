@@ -172,6 +172,46 @@ target_link_libraries(TestFileRead
     Qt6::Core
 )
 
+# V4分层算量测试
+add_executable(TestV4
+    src/test_v4.cpp
+    src/EngineCad.cpp
+    src/DXFWrapper.cpp
+    src/ExcelExporter.cpp
+    include/Config.h
+    include/Geometry.h
+    include/utils/LineUtils.h
+    include/utils/EnvelopeGenerator.h
+    include/utils/RulerDetector.h
+    include/utils/StationMatcher.h
+    include/utils/OutputHelper.h
+    include/utils/HatchProcessor.h
+    include/utils/VirtualBoxBuilder.h
+    include/utils/LayerExtractor.h
+    include/utils/EntityHelper.h
+    src/EngineCad.h
+    src/DXFWrapper.h
+    src/ExcelExporter.h
+    ${DXFLIB_SOURCES}
+    ${DXFLIB_HEADERS}
+)
+
+target_link_libraries(TestV4
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+
+target_include_directories(TestV4 PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/utils
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+set_target_properties(TestV4 PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
+)
+
 # ==================== 包含目录 ====================
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include

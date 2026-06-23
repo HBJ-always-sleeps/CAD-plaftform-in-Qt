@@ -113,20 +113,31 @@ def build_design_polygon(excav_lines, sect_x_min, sect_x_max):
     if design_x_max <= design_x_min:
         return None
 
+    # 收集所有采样X坐标：均匀步长 + 开挖线折点
+    sample_xs = []
+    x_current = design_x_min
+    while x_current <= design_x_max:
+        sample_xs.append(x_current)
+        x_current += 1.0
+    # 加入开挖线折点的X坐标，确保边界严格沿折点分布
+    for line in excav_lines:
+        for pt in line.coords:
+            if design_x_min <= pt[0] <= design_x_max:
+                sample_xs.append(pt[0])
+    # 排序去重
+    sample_xs = sorted(set(sample_xs))
+
     x_samples = []
     y_samples = []
-    x_current = design_x_min
-
-    while x_current <= design_x_max:
-        min_y = None
+    for xc in sample_xs:
+        max_y = None
         for line in excav_lines:
-            y = get_y_at_x(line, x_current)
-            if y is not None and (min_y is None or y < min_y):
-                min_y = y
-        if min_y is not None:
-            x_samples.append(x_current)
-            y_samples.append(min_y)
-        x_current += 1.0
+            y = get_y_at_x(line, xc)
+            if y is not None and (max_y is None or y > max_y):
+                max_y = y
+        if max_y is not None:
+            x_samples.append(xc)
+            y_samples.append(max_y)
 
     if len(x_samples) < 2:
         return None
@@ -319,6 +330,7 @@ def compute_autosection(data):
     strata_layers = data.get('strata_layers', [])
     sections = data.get('sections', [])
     excav_lines_data = data.get('excav_lines', [])
+    overexc_lines_data = data.get('overexc_lines', [])
 
     LOG(f"[INFO] 分层算量: 高程={target_elevation}, 模式={calc_mode}")
     LOG(f"[INFO] 地层数: {len(strata_layers)}, 断面数: {len(sections)}")
@@ -339,6 +351,13 @@ def compute_autosection(data):
         pts = line_data['points']
         if len(pts) >= 2:
             excav_lines_shapely.append(LineString(pts))
+
+    # 转换超挖线为Shapely对象（用于扩展断面覆盖范围）
+    overexc_lines_shapely = []
+    for line_data in overexc_lines_data:
+        pts = line_data['points']
+        if len(pts) >= 2:
+            overexc_lines_shapely.append(LineString(pts))
 
     msp = doc.modelspace()
 
@@ -436,6 +455,51 @@ def compute_autosection(data):
                     aux_shapely.append(LineString(pts))
             if aux_shapely:
                 final_section = generate_envelope(dmx_line, aux_shapely, 'lower')
+
+        # 扩展断面线以覆盖开挖线和超挖线X范围（防止V4比DMX窄导致面积缺失）
+        # 只考虑断面Y范围附近且X范围重叠的线条
+        sect_coords_tmp = list(final_section.coords)
+        sect_x_min_tmp = min(c[0] for c in sect_coords_tmp)
+        sect_x_max_tmp = max(c[0] for c in sect_coords_tmp)
+        sect_y_min_tmp = min(c[1] for c in sect_coords_tmp)
+        sect_y_max_tmp = max(c[1] for c in sect_coords_tmp)
+        # 筛选在断面Y范围内且X范围重叠的开挖线和超挖线
+        # X容差设为断面宽度的50%，确保只匹配当前断面附近的线条
+        sect_width = sect_x_max_tmp - sect_x_min_tmp
+        x_margin = sect_width * 0.5
+        # 合并开挖线和超挖线用于扩展计算
+        all_boundary_lines = excav_lines_shapely + overexc_lines_shapely
+        local_excav = [l for l in all_boundary_lines
+                       if max(p[1] for p in l.coords) >= sect_y_min_tmp - 100
+                       and min(p[1] for p in l.coords) <= sect_y_max_tmp + 100
+                       and max(p[0] for p in l.coords) >= sect_x_min_tmp - x_margin
+                       and min(p[0] for p in l.coords) <= sect_x_max_tmp + x_margin]
+        if local_excav:
+            excav_x_min = min(min(p[0] for p in l.coords) for l in local_excav)
+            excav_x_max = max(max(p[0] for p in l.coords) for l in local_excav)
+            # 限制扩展幅度（最多扩展50单位）
+            max_extend = 50.0
+            excav_x_min = max(excav_x_min, sect_x_min_tmp - max_extend)
+            excav_x_max = min(excav_x_max, sect_x_max_tmp + max_extend)
+            extended_coords = list(sect_coords_tmp)
+            if sect_x_min_tmp > excav_x_min:
+                # 使用第一个线段外推
+                x1, y1 = sect_coords_tmp[0]
+                x2, y2 = sect_coords_tmp[1]
+                if abs(x2 - x1) > 1e-6:
+                    slope = (y2 - y1) / (x2 - x1)
+                    y_ext = y1 + slope * (excav_x_min - x1)
+                    extended_coords.insert(0, (excav_x_min, y_ext))
+            if sect_x_max_tmp < excav_x_max:
+                # 使用最后一个线段外推
+                x1, y1 = sect_coords_tmp[-2]
+                x2, y2 = sect_coords_tmp[-1]
+                if abs(x2 - x1) > 1e-6:
+                    slope = (y2 - y1) / (x2 - x1)
+                    y_ext = y2 + slope * (excav_x_max - x2)
+                    extended_coords.append((excav_x_max, y_ext))
+            if len(extended_coords) > len(sect_coords_tmp):
+                final_section = LineString(extended_coords)
 
         # 构建开挖区域多边形
         sect_coords = list(final_section.coords)
@@ -669,6 +733,7 @@ def compute_autosection_backfill(data):
     strata_layers = data.get('strata_layers', [])
     sections = data.get('sections', [])
     excav_lines_data = data.get('excav_lines', [])
+    overexc_lines_data = data.get('overexc_lines', [])
 
     LOG(f"[INFO] 分层+回淤合并: 高程={target_elevation}, 模式={calc_mode}")
     LOG(f"[INFO] 地层数: {len(strata_layers)}, 断面数: {len(sections)}")
@@ -692,6 +757,13 @@ def compute_autosection_backfill(data):
         pts = line_data['points']
         if len(pts) >= 2:
             excav_lines_shapely.append(LineString(pts))
+
+    # 转换超挖线（用于扩展断面覆盖范围）
+    overexc_lines_shapely = []
+    for line_data in overexc_lines_data:
+        pts = line_data['points']
+        if len(pts) >= 2:
+            overexc_lines_shapely.append(LineString(pts))
 
     msp = doc.modelspace()
 
@@ -781,6 +853,44 @@ def compute_autosection_backfill(data):
         final_section = dmx_line
         if merge_section and update_lines_shapely:
             final_section = generate_envelope(dmx_line, update_lines_shapely, 'lower')
+
+        # 扩展断面线以覆盖开挖线和超挖线X范围（防止V4比DMX窄导致面积缺失）
+        sect_coords_tmp = list(final_section.coords)
+        sect_x_min_tmp = min(c[0] for c in sect_coords_tmp)
+        sect_x_max_tmp = max(c[0] for c in sect_coords_tmp)
+        sect_y_min_tmp = min(c[1] for c in sect_coords_tmp)
+        sect_y_max_tmp = max(c[1] for c in sect_coords_tmp)
+        sect_width = sect_x_max_tmp - sect_x_min_tmp
+        x_margin = sect_width * 0.5
+        all_boundary_lines = excav_lines_shapely + overexc_lines_shapely
+        local_excav = [l for l in all_boundary_lines
+                       if max(p[1] for p in l.coords) >= sect_y_min_tmp - 100
+                       and min(p[1] for p in l.coords) <= sect_y_max_tmp + 100
+                       and max(p[0] for p in l.coords) >= sect_x_min_tmp - x_margin
+                       and min(p[0] for p in l.coords) <= sect_x_max_tmp + x_margin]
+        if local_excav:
+            excav_x_min = min(min(p[0] for p in l.coords) for l in local_excav)
+            excav_x_max = max(max(p[0] for p in l.coords) for l in local_excav)
+            max_extend = 50.0
+            excav_x_min = max(excav_x_min, sect_x_min_tmp - max_extend)
+            excav_x_max = min(excav_x_max, sect_x_max_tmp + max_extend)
+            extended_coords = list(sect_coords_tmp)
+            if sect_x_min_tmp > excav_x_min:
+                x1, y1 = sect_coords_tmp[0]
+                x2, y2 = sect_coords_tmp[1]
+                if abs(x2 - x1) > 1e-6:
+                    slope = (y2 - y1) / (x2 - x1)
+                    y_ext = y1 + slope * (excav_x_min - x1)
+                    extended_coords.insert(0, (excav_x_min, y_ext))
+            if sect_x_max_tmp < excav_x_max:
+                x1, y1 = sect_coords_tmp[-2]
+                x2, y2 = sect_coords_tmp[-1]
+                if abs(x2 - x1) > 1e-6:
+                    slope = (y2 - y1) / (x2 - x1)
+                    y_ext = y2 + slope * (excav_x_max - x2)
+                    extended_coords.append((excav_x_max, y_ext))
+            if len(extended_coords) > len(sect_coords_tmp):
+                final_section = LineString(extended_coords)
 
         # 构建开挖区域多边形
         sect_coords = list(final_section.coords)
