@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/scripts">
+        <file alias="excel_migrate.py">../../scripts/excel_migrate.py</file>
+        <file alias="autosection_compute.py">../../scripts/autosection_compute.py</file>
+        <file alias="autopaste_apply.py">../../scripts/autopaste_apply.py</file>
+        <file alias="geology_topview_v41.py">../../scripts/geology_topview_v41.py</file>
+        <file alias="geology_topview_section_connect_debug.py">../../scripts/geology_topview_section_connect_debug.py</file>
+    </qresource>
+</RCC>
