@@ -1136,8 +1136,13 @@ bool EngineCad::runAutopaste(const QMap<QString, QString> &params, LogCallback l
     std::sort(sortedStationValues.begin(), sortedStationValues.end());
     log(QStringLiteral("  不同桩号值数量: %1").arg(sortedStationValues.size()), kInfo);
 
-    // 1d. Build source sets: match rect -> curve -> station
+    // 1d. Build source sets: match rect -> curve -> station.
+    // The source rectangle's geometric centre is only a layout centre. At a
+    // channel bend the true zero point moves inside that rectangle; it is the
+    // long vertical XSECTION spine line. Using the layout centre causes a
+    // progressive lateral offset in the pasted curves around the bend.
     QVector<SourceSetInfo> sourceSets;
+    int sourceSpineAnchorCount = 0;
     for (int i = 0; i < smallRects.size(); ++i) {
         const SmallRectInfo &rect = smallRects[i];
         SourceSetInfo ss;
@@ -1160,6 +1165,35 @@ bool EngineCad::runAutopaste(const QMap<QString, QString> &params, LogCallback l
             }
         }
 
+        // Locate the 0 m spine/reference within this source section. It is a
+        // near-vertical polyline spanning the small rectangle height. Short
+        // tick marks and the rectangular border are intentionally excluded.
+        double bestSpineSpan = -1.0;
+        double spineX = rect.basepoint.x;
+        for (const Line2D &candidate : srcXsectionLines) {
+            if (candidate.points.size() < 2)
+                continue;
+            const Box2D candidateBox = candidate.bounds();
+            const double candidateWidth = candidateBox.width();
+            const double candidateHeight = candidateBox.height();
+            if (candidateWidth > 1e-4 ||
+                candidateHeight < rect.bbox.height() * 0.80 ||
+                candidateBox.minX < rect.bbox.minX - 1e-4 ||
+                candidateBox.maxX > rect.bbox.maxX + 1e-4 ||
+                candidateBox.minY > rect.bbox.minY + 1e-4 ||
+                candidateBox.maxY < rect.bbox.maxY - 1e-4) {
+                continue;
+            }
+            if (candidateHeight > bestSpineSpan) {
+                bestSpineSpan = candidateHeight;
+                spineX = candidateBox.centerX();
+            }
+        }
+        if (bestSpineSpan > 0.0) {
+            ss.basepoint.x = spineX;
+            ++sourceSpineAnchorCount;
+        }
+
         // Positional station matching
         if (i < sortedStationValues.size()) {
             ss.station = sortedStationValues[i];
@@ -1179,6 +1213,8 @@ bool EngineCad::runAutopaste(const QMap<QString, QString> &params, LogCallback l
     log(QStringLiteral("  成套数量: %1").arg(sourceSets.size()), kInfo);
     log(QStringLiteral("  有断面线: %1").arg(withCurve), kInfo);
     log(QStringLiteral("  有桩号: %1").arg(withStation), kInfo);
+    log(QStringLiteral("  源断面脊梁基点: %1/%2")
+            .arg(sourceSpineAnchorCount).arg(sourceSets.size()), kInfo);
 
     // ===== Phase 2: Detect target file matched sets =====
     log(QStringLiteral("[检测目标文件成套数据 v2]"), kInfo);
